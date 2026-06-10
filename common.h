@@ -1,0 +1,158 @@
+#ifndef COMMON_H
+#define COMMON_H
+
+#include <time.h>
+#include <stdint.h>
+
+/* ============================================================================
+ * CONSTANTES E CONFIGURAÇÕES
+ * ============================================================================ */
+
+#define TRADING_SERVER_PORT 9000
+#define QUOTATION_SERVER_PORT 9001
+#define MAX_ASSETS 2
+#define MESSAGE_TIMEOUT_SECONDS 30  /* Message Expiration TTL */
+#define BUFFER_SIZE 1024
+
+/* ============================================================================
+ * ENUMS - TIPOS DE MENSAGEM E ESTADO
+ * ============================================================================ */
+
+/* Estados do Saga (fluxo de compra) */
+typedef enum {
+    SAGA_INITIAL,           /* Estado inicial */
+    SAGA_WAITING_QUOTE_1,   /* Aguardando cotação do ativo 1 */
+    SAGA_QUOTE_1_RECEIVED,  /* Cotação do ativo 1 recebida */
+    SAGA_WAITING_QUOTE_2,   /* Aguardando cotação do ativo 2 */
+    SAGA_QUOTE_2_RECEIVED,  /* Cotação do ativo 2 recebida */
+    SAGA_RISK_ANALYSIS,     /* Análise de risco em andamento */
+    SAGA_EXECUTION,         /* Execução da compra */
+    SAGA_COMPLETED,         /* Compra completada */
+    SAGA_FAILED             /* Compra falhou */
+} SagaState;
+
+/* Tipos de mensagem para comunicação */
+typedef enum {
+    MSG_QUOTE_REQUEST,      /* Cliente solicita cotação */
+    MSG_QUOTE_RESPONSE,     /* Servidor responde com cotação */
+    MSG_TRADE_ORDER,        /* Ordem de compra */
+    MSG_TRADE_RESPONSE,     /* Resposta da operação de compra */
+    MSG_ERROR               /* Mensagem de erro */
+} MessageType;
+
+/* ============================================================================
+ * ESTRUTURAS DE DADOS
+ * ============================================================================ */
+
+/* Cabeçalho de mensagem com suporte a expiração */
+typedef struct {
+    uint32_t message_id;           /* ID único da mensagem */
+    MessageType type;              /* Tipo de mensagem */
+    time_t timestamp;              /* Timestamp de criação */
+    int32_t ttl;                   /* Time-to-live em segundos */
+} MessageHeader;
+
+/* Requisição de cotação */
+typedef struct {
+    MessageHeader header;
+    char asset_code[32];           /* Código do ativo (ex: "PETR4") */
+    float quantity;                /* Quantidade solicitada */
+} QuoteRequest;
+
+/* Resposta de cotação */
+typedef struct {
+    MessageHeader header;
+    char asset_code[32];
+    float price;                   /* Preço unitário */
+    float quantity;
+    time_t valid_until;            /* Validade da cotação */
+} QuoteResponse;
+
+/* Ordem de compra */
+typedef struct {
+    MessageHeader header;
+    char asset_codes[MAX_ASSETS][32];
+    float quantities[MAX_ASSETS];
+    float prices[MAX_ASSETS];
+    float total_value;
+    float risk_score;              /* Score de risco (0.0 - 1.0) */
+} TradeOrder;
+
+/* Resposta de operação de compra */
+typedef struct {
+    MessageHeader header;
+    uint32_t order_id;
+    int success;                   /* 1 = sucesso, 0 = falha */
+    char status_message[256];
+} TradeResponse;
+
+/* Contexto do processo Saga (Process Manager) */
+typedef struct {
+    uint32_t saga_id;
+    SagaState current_state;
+    time_t created_at;
+    
+    /* Dados dos ativos */
+    char asset_codes[MAX_ASSETS][32];
+    float quantities[MAX_ASSETS];
+    float prices[MAX_ASSETS];
+    int quotes_received;
+    
+    /* Análise de risco */
+    float total_value;
+    float risk_score;
+    
+    /* Expiração */
+    time_t expiration_time;
+} SagaContext;
+
+/* ============================================================================
+ * FUNÇÕES UTILITÁRIAS
+ * ============================================================================ */
+
+/**
+ * Verifica se uma mensagem está expirada
+ * Retorna 1 se expirada, 0 caso contrário
+ */
+static inline int is_message_expired(const MessageHeader *header) {
+    time_t now = time(NULL);
+    if (header->ttl > 0) {
+        return (now - header->timestamp) > header->ttl;
+    }
+    return 0;
+}
+
+/**
+ * Cria um novo header de mensagem com TTL
+ */
+static inline void create_message_header(MessageHeader *header,
+                                         uint32_t msg_id,
+                                         MessageType type,
+                                         int32_t ttl) {
+    header->message_id = msg_id;
+    header->type = type;
+    header->timestamp = time(NULL);
+    header->ttl = ttl;
+}
+
+/**
+ * Inicializa um contexto de Saga
+ */
+static inline void init_saga_context(SagaContext *saga,
+                                     uint32_t saga_id,
+                                     const char *asset1,
+                                     const char *asset2,
+                                     float qty1, float qty2) {
+    saga->saga_id = saga_id;
+    saga->current_state = SAGA_INITIAL;
+    saga->created_at = time(NULL);
+    saga->expiration_time = saga->created_at + MESSAGE_TIMEOUT_SECONDS;
+    
+    strncpy(saga->asset_codes[0], asset1, 31);
+    strncpy(saga->asset_codes[1], asset2, 31);
+    saga->quantities[0] = qty1;
+    saga->quantities[1] = qty2;
+    saga->quotes_received = 0;
+}
+
+#endif /* COMMON_H */
