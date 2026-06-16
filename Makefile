@@ -8,8 +8,12 @@ LDFLAGS = -lpthread
 # Targets
 SERVER = quotation_server
 CLIENT = trading_client
+RISK = risk_server
+PURCHASE = purchase_server
 
 all: $(SERVER) $(CLIENT)
+
+all: $(SERVER) $(CLIENT) $(RISK) $(PURCHASE)
 
 $(SERVER): server.c common.h
 	$(CC) $(CFLAGS) -o $(SERVER) server.c $(LDFLAGS)
@@ -19,9 +23,23 @@ $(CLIENT): client.c common.h
 	$(CC) $(CFLAGS) -o $(CLIENT) client.c $(LDFLAGS)
 	@echo "✓ Cliente compilado: $(CLIENT)"
 
+$(RISK): risk_server.c common.h
+	$(CC) $(CFLAGS) -o $(RISK) risk_server.c
+	@echo "✓ Risk server compilado: $(RISK)"
+
+$(PURCHASE): purchase_server.c common.h
+	$(CC) $(CFLAGS) -o $(PURCHASE) purchase_server.c
+	@echo "✓ Purchase server compilado: $(PURCHASE)"
+
 # Executar servidor em background
 run-server: $(SERVER)
 	./$(SERVER) 9001
+
+run-risk:
+	./$(RISK) 9002
+
+run-purchase:
+	./$(PURCHASE) 9100
 
 # Executar cliente (conecta ao servidor)
 run-client: $(CLIENT)
@@ -35,7 +53,7 @@ run-both: $(SERVER) $(CLIENT)
 
 # Limpeza
 clean:
-	rm -f $(SERVER) $(CLIENT) *.o
+	rm -f $(SERVER) $(CLIENT) $(RISK) $(PURCHASE) *.o
 	@echo "✓ Arquivos temporários removidos"
 
 # Ajuda

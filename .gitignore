@@ -1,3 +1,5 @@
 main
 quotation_server
 trading_client
+purchase_server
+risk_server

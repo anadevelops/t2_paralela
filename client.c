@@ -9,24 +9,6 @@
 
 #include "common.h"
 
-/* ============================================================================
- * CLIENTE DE TRADING (SISTEMA DE OPERAÇÃO)
- * 
- * Implementa os padrões:
- * - SAGA: Fluxo de compra com múltiplas etapas e possibilidade de rollback
- * - PROCESS MANAGER: Gerenciam estado das operações em andamento
- * - MESSAGE EXPIRATION: TTL nas mensagens, descarta mensagens expiradas
- * 
- * Máximo desacoplamento através de:
- * - Separação entre lógica de negócio (Saga) e comunicação
- * - Mensagens bem definidas (contrato)
- * - Estado centralizado no Process Manager
- * ============================================================================ */
-
-/* ============================================================================
- * PROCESS MANAGER - Gerenciador de Processos/Sagas em Andamento
- * ============================================================================ */
-
 #define MAX_SAGAS 10
 
 typedef struct {
@@ -36,9 +18,7 @@ typedef struct {
 
 static ProcessManager g_process_manager = {0};
 
-/**
- * Cria uma nova saga no Process Manager
- */
+// Cria uma nova saga no Process Manager
 static SagaContext *process_manager_create_saga(uint32_t saga_id,
                                                  const char *asset1,
                                                  const char *asset2,
@@ -57,9 +37,7 @@ static SagaContext *process_manager_create_saga(uint32_t saga_id,
     return saga;
 }
 
-/**
- * Obtém uma saga pelo ID
- */
+// Obtém uma saga pelo ID
 static SagaContext *process_manager_get_saga(uint32_t saga_id) {
     for (int i = 0; i < g_process_manager.num_sagas; i++) {
         if (g_process_manager.sagas[i].saga_id == saga_id) {
@@ -69,9 +47,7 @@ static SagaContext *process_manager_get_saga(uint32_t saga_id) {
     return NULL;
 }
 
-/**
- * Atualiza o estado de uma saga
- */
+// Atualiza o estado de uma saga
 static void process_manager_update_saga_state(uint32_t saga_id,
                                                SagaState new_state) {
     SagaContext *saga = process_manager_get_saga(saga_id);
@@ -82,9 +58,8 @@ static void process_manager_update_saga_state(uint32_t saga_id,
     }
 }
 
-/**
- * Remove uma saga completada
- */
+
+// Remove uma saga completada
 static void process_manager_remove_saga(uint32_t saga_id) {
     for (int i = 0; i < g_process_manager.num_sagas; i++) {
         if (g_process_manager.sagas[i].saga_id == saga_id) {
@@ -96,13 +71,6 @@ static void process_manager_remove_saga(uint32_t saga_id) {
     }
 }
 
-/* ============================================================================
- * SAGA - Orquestrador de Fluxo de Compra
- * ============================================================================ */
-
-/**
- * Etapa 1: Requisita cotação do primeiro ativo
- */
 static int saga_request_quote_1(int socket, SagaContext *saga) {
     printf("\n[SAGA %u] ▶ Etapa 1: Solicitando cotação de %s (%.2f unidades)\n",
            saga->saga_id, saga->asset_codes[0], saga->quantities[0]);
@@ -122,9 +90,6 @@ static int saga_request_quote_1(int socket, SagaContext *saga) {
     return 1;
 }
 
-/**
- * Etapa 2: Processa resposta de cotação do ativo 1
- */
 static int saga_receive_quote_1(int socket, SagaContext *saga) {
     printf("\n[SAGA %u] ◄ Etapa 2: Aguardando cotação de %s...\n",
            saga->saga_id, saga->asset_codes[0]);
@@ -136,8 +101,7 @@ static int saga_receive_quote_1(int socket, SagaContext *saga) {
         fprintf(stderr, "❌ Erro ao receber cotação 1\n");
         return 0;
     }
-    
-    /* Verifica expiração */
+
     if (is_message_expired(&resp.header)) {
         printf("[SAGA %u] ⚠ Cotação expirada (ignorando)\n", saga->saga_id);
         return 0;
@@ -153,9 +117,6 @@ static int saga_receive_quote_1(int socket, SagaContext *saga) {
     return 1;
 }
 
-/**
- * Etapa 3: Requisita cotação do segundo ativo
- */
 static int saga_request_quote_2(int socket, SagaContext *saga) {
     printf("\n[SAGA %u] ▶ Etapa 3: Solicitando cotação de %s (%.2f unidades)\n",
            saga->saga_id, saga->asset_codes[1], saga->quantities[1]);
@@ -175,9 +136,6 @@ static int saga_request_quote_2(int socket, SagaContext *saga) {
     return 1;
 }
 
-/**
- * Etapa 4: Processa resposta de cotação do ativo 2
- */
 static int saga_receive_quote_2(int socket, SagaContext *saga) {
     printf("\n[SAGA %u] ◄ Etapa 4: Aguardando cotação de %s...\n",
            saga->saga_id, saga->asset_codes[1]);
@@ -189,8 +147,7 @@ static int saga_receive_quote_2(int socket, SagaContext *saga) {
         fprintf(stderr, "❌ Erro ao receber cotação 2\n");
         return 0;
     }
-    
-    /* Verifica expiração */
+
     if (is_message_expired(&resp.header)) {
         printf("[SAGA %u] ⚠ Cotação expirada (ignorando)\n", saga->saga_id);
         return 0;
@@ -206,69 +163,140 @@ static int saga_receive_quote_2(int socket, SagaContext *saga) {
     return 1;
 }
 
-/**
- * Etapa 5: Análise de risco
- */
 static int saga_analyze_risk(SagaContext *saga) {
-    printf("\n[SAGA %u] 🔍 Etapa 5: Analisando risco da operação...\n",
+    printf("\n[SAGA %u] 🔍 Etapa 5: Enviando dados ao Risk Server...\n",
            saga->saga_id);
-    
-    /* Calcula valor total */
+
     saga->total_value = (saga->prices[0] * saga->quantities[0]) +
                         (saga->prices[1] * saga->quantities[1]);
-    
-    /* Simula análise de risco (simplificada) */
-    saga->risk_score = 0.3f;  /* 30% de risco (baixo) */
-    
-    printf("[SAGA %u] 📊 Valor total da operação: R$%.2f\n",
-           saga->saga_id, saga->total_value);
-    printf("[SAGA %u] 📈 Score de risco: %.1f%% (ACEITO)\n",
-           saga->saga_id, saga->risk_score * 100);
-    
-    if (saga->risk_score > 0.7f) {
-        printf("[SAGA %u] ❌ Risco muito alto! Operação CANCELADA\n",
-               saga->saga_id);
+
+    // Monta TradeOrder com informações para o Risk Server
+    TradeOrder order;
+    create_message_header(&order.header, saga->saga_id, MSG_TRADE_ORDER, MESSAGE_TIMEOUT_SECONDS);
+    strncpy(order.asset_codes[0], saga->asset_codes[0], 31);
+    strncpy(order.asset_codes[1], saga->asset_codes[1], 31);
+    order.quantities[0] = saga->quantities[0];
+    order.quantities[1] = saga->quantities[1];
+    order.prices[0] = saga->prices[0];
+    order.prices[1] = saga->prices[1];
+    order.total_value = saga->total_value;
+
+    // Conecta ao Risk Server (localhost:9002)
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) { perror("socket"); return 0; }
+    struct sockaddr_in raddr;
+    memset(&raddr,0,sizeof(raddr));
+    raddr.sin_family = AF_INET;
+    raddr.sin_port = htons(9002);
+    inet_pton(AF_INET, "127.0.0.1", &raddr.sin_addr);
+
+    if (connect(sock, (struct sockaddr *)&raddr, sizeof(raddr)) < 0) {
+        perror("connect to risk"); close(sock); return 0;
+    }
+
+    if (send(sock, &order, sizeof(order), 0) < 0) { perror("send"); close(sock); return 0; }
+
+    TradeResponse resp;
+    ssize_t r = recv(sock, &resp, sizeof(resp), 0);
+    close(sock);
+    if (r <= 0) { fprintf(stderr, "Erro recebendo resposta do Risk Server\n"); return 0; }
+
+    if (is_message_expired(&resp.header)) {
+        printf("[SAGA %u] ⚠ Resposta do Risk Server expirada\n", saga->saga_id);
+        return 0;
+    }
+
+    if (!resp.success) {
+        printf("[SAGA %u] Risco proibiu operação: %s\n", saga->saga_id, resp.status_message);
         process_manager_update_saga_state(saga->saga_id, SAGA_FAILED);
         return 0;
     }
-    
+
+    printf("[SAGA %u] Risk Server aprovou: %s\n", saga->saga_id, resp.status_message);
     process_manager_update_saga_state(saga->saga_id, SAGA_RISK_ANALYSIS);
     return 1;
 }
 
-/**
- * Etapa 6: Execução da compra
- */
 static int saga_execute_trade(SagaContext *saga) {
-    printf("\n[SAGA %u] ✈ Etapa 6: Executando compra...\n", saga->saga_id);
-    
-    /* Simula execução */
-    sleep(1);
-    
-    printf("[SAGA %u] 🎯 Compra de %s × %.2f @ R$%.2f = R$%.2f\n",
-           saga->saga_id,
-           saga->asset_codes[0], saga->quantities[0],
-           saga->prices[0], saga->prices[0] * saga->quantities[0]);
-    
-    printf("[SAGA %u] 🎯 Compra de %s × %.2f @ R$%.2f = R$%.2f\n",
-           saga->saga_id,
-           saga->asset_codes[1], saga->quantities[1],
-           saga->prices[1], saga->prices[1] * saga->quantities[1]);
-    
-    printf("[SAGA %u] ✅ Operação executada com sucesso!\n", saga->saga_id);
-    printf("[SAGA %u] 💰 Valor total investido: R$%.2f\n",
-           saga->saga_id, saga->total_value);
-    
+    printf("\n[SAGA %u] ✈ Etapa 6: Enviando ordens de compra ao Purchase Server...\n", saga->saga_id);
+
+    // Envia ordem de compra para o primeiro ativo (purchase server localhost:9100)
+    TradeOrder order1;
+    create_message_header(&order1.header, saga->saga_id, MSG_TRADE_ORDER, MESSAGE_TIMEOUT_SECONDS);
+    strncpy(order1.asset_codes[0], saga->asset_codes[0], 31);
+    order1.quantities[0] = saga->quantities[0];
+    order1.prices[0] = saga->prices[0];
+
+    int sock1 = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock1 < 0) { perror("socket"); return 0; }
+    struct sockaddr_in baddr;
+    memset(&baddr,0,sizeof(baddr)); baddr.sin_family = AF_INET; baddr.sin_port = htons(9100);
+    inet_pton(AF_INET, "127.0.0.1", &baddr.sin_addr);
+    if (connect(sock1, (struct sockaddr *)&baddr, sizeof(baddr)) < 0) { perror("connect buy1"); close(sock1); return 0; }
+    if (send(sock1, &order1, sizeof(order1), 0) < 0) { perror("send buy1"); close(sock1); return 0; }
+    TradeResponse resp1; if (recv(sock1, &resp1, sizeof(resp1), 0) <= 0) { fprintf(stderr,"❌ No response buy1\n"); close(sock1); return 0; }
+    close(sock1);
+
+    if (is_message_expired(&resp1.header)) { printf("[SAGA %u] ⚠ Resposta compra 1 expirada\n", saga->saga_id); return 0; }
+    if (!resp1.success) {
+        printf("[SAGA %u] Falha na compra do primeiro ativo: %s\n", saga->saga_id, resp1.status_message);
+        process_manager_update_saga_state(saga->saga_id, SAGA_FAILED);
+        return 0;
+    }
+    printf("[SAGA %u] ✓ Compra 1 executada: %s\n", saga->saga_id, resp1.status_message);
+
+    // Envia ordem de compra para o segundo ativo
+    TradeOrder order2;
+    create_message_header(&order2.header, saga->saga_id + 1, MSG_TRADE_ORDER, MESSAGE_TIMEOUT_SECONDS);
+    strncpy(order2.asset_codes[0], saga->asset_codes[1], 31);
+    order2.quantities[0] = saga->quantities[1];
+    order2.prices[0] = saga->prices[1];
+
+    int sock2 = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock2 < 0) { perror("socket"); return 0; }
+    if (connect(sock2, (struct sockaddr *)&baddr, sizeof(baddr)) < 0) { perror("connect buy2"); close(sock2); return 0; }
+    if (send(sock2, &order2, sizeof(order2), 0) < 0) { perror("send buy2"); close(sock2); return 0; }
+    TradeResponse resp2; if (recv(sock2, &resp2, sizeof(resp2), 0) <= 0) { fprintf(stderr,"❌ No response buy2\n"); close(sock2); return 0; }
+    close(sock2);
+
+    if (is_message_expired(&resp2.header)) { printf("[SAGA %u] ⚠ Resposta compra 2 expirada\n", saga->saga_id); return 0; }
+    if (!resp2.success) {
+        printf("[SAGA %u] Falha na compra do segundo ativo: %s\n", saga->saga_id, resp2.status_message);
+        // Compensação: vender o primeiro ativo (envia ordem de sell com quantidade negativa)
+        printf("[SAGA %u] ⚠ Iniciando compensação: vendendo ativo 1\n", saga->saga_id);
+        TradeOrder cancel1;
+        create_message_header(&cancel1.header, saga->saga_id + 2, MSG_TRADE_ORDER, MESSAGE_TIMEOUT_SECONDS);
+        strncpy(cancel1.asset_codes[0], saga->asset_codes[0], 31);
+        cancel1.quantities[0] = -saga->quantities[0];
+        cancel1.prices[0] = saga->prices[0];
+
+        int sockc = socket(AF_INET, SOCK_STREAM, 0);
+        if (sockc >= 0) {
+            if (connect(sockc, (struct sockaddr *)&baddr, sizeof(baddr)) == 0) {
+                TradeResponse cresp; send(sockc, &cancel1, sizeof(cancel1), 0);
+                if (recv(sockc, &cresp, sizeof(cresp), 0) > 0) {
+                    printf("[SAGA %u] Compensação: %s\n", saga->saga_id, cresp.status_message);
+                }
+            }
+            close(sockc);
+        }
+
+        process_manager_update_saga_state(saga->saga_id, SAGA_FAILED);
+        return 0;
+    }
+
+    printf("[SAGA %u] ✓ Compra 2 executada: %s\n", saga->saga_id, resp2.status_message);
+    printf("[SAGA %u] Operação executada com sucesso!\n", saga->saga_id);
+    printf("[SAGA %u] Valor total investido: R$%.2f\n", saga->saga_id, saga->total_value);
+
     process_manager_update_saga_state(saga->saga_id, SAGA_COMPLETED);
     return 1;
 }
 
-/**
- * Orquestra o fluxo completo de uma Saga
- */
+
 static void saga_orchestrate(int socket, SagaContext *saga) {
     printf("\n========================================\n");
-    printf("🚀 INICIANDO SAGA #%u\n", saga->saga_id);
+    printf("INICIANDO SAGA #%u\n", saga->saga_id);
     printf("========================================\n");
     
     /* Etapa 1-2: Cotação ativo 1 */
@@ -298,21 +326,17 @@ static void saga_orchestrate(int socket, SagaContext *saga) {
     }
     
     printf("\n========================================\n");
-    printf("✅ SAGA #%u COMPLETADA COM SUCESSO!\n", saga->saga_id);
+    printf("SAGA #%u COMPLETADA COM SUCESSO!\n", saga->saga_id);
     printf("========================================\n\n");
     
     return;
     
 saga_failed:
     printf("\n========================================\n");
-    printf("❌ SAGA #%u FALHOU!\n", saga->saga_id);
+    printf("SAGA #%u FALHOU!\n", saga->saga_id);
     printf("========================================\n\n");
     process_manager_update_saga_state(saga->saga_id, SAGA_FAILED);
 }
-
-/* ============================================================================
- * CLIENTE PRINCIPAL
- * ============================================================================ */
 
 static int connect_to_server(const char *host, int port) {
     int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -342,9 +366,7 @@ static int connect_to_server(const char *host, int port) {
     return socket_fd;
 }
 
-/**
- * Função principal do cliente
- */
+
 int trading_client_main(const char *server_host, int server_port) {
     int socket_fd = connect_to_server(server_host, server_port);
     if (socket_fd < 0) {
@@ -380,10 +402,6 @@ int trading_client_main(const char *server_host, int server_port) {
     
     return 0;
 }
-
-/* ============================================================================
- * PONTO DE ENTRADA
- * ============================================================================ */
 
 int main(int argc, char *argv[]) {
     const char *host = "127.0.0.1";

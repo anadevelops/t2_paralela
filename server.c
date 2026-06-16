@@ -10,21 +10,12 @@
 
 #include "common.h"
 
-/* ============================================================================
- * SERVIDOR DE COTAÇÕES
- * 
- * Sistema desacoplado que fornece cotações fixas quando solicitado.
- * Implementa Message Expiration descartando requisições expiradas.
- * 
- * Padrão: Message-Oriented Architecture
- * ============================================================================ */
-
 typedef struct {
     int client_socket;
     int thread_id;
 } ClientContext;
 
-/* Tabela de cotações fixas (simulação de dados reais) */
+// Tabela de cotações fixas (simulação de dados reais)
 typedef struct {
     char asset_code[32];
     float price;
@@ -38,34 +29,25 @@ static QuotationTable quotes[] = {
 
 static int num_quotes = sizeof(quotes) / sizeof(quotes[0]);
 
-/**
- * Busca uma cotação fixa na tabela
- */
 static float get_fixed_quote(const char *asset_code) {
     for (int i = 0; i < num_quotes; i++) {
         if (strcmp(quotes[i].asset_code, asset_code) == 0) {
             return quotes[i].price;
         }
     }
-    return -1.0f;  /* Ativo não encontrado */
+    return -1.0f; 
 }
 
-/**
- * Processa uma requisição de cotação
- * Implementa Message Expiration: descarta requisições expiradas
- */
 static void process_quote_request(int socket, const QuoteRequest *req) {
     printf("[SERVER] Recebido: requisição de cotação para %s (qty: %.2f)\n",
            req->asset_code, req->quantity);
     
-    /* Verifica expiração da mensagem */
     if (is_message_expired(&req->header)) {
         printf("[SERVER] ⚠ MENSAGEM EXPIRADA! ID: %u (ignorando)\n",
                req->header.message_id);
         return;
     }
     
-    /* Busca a cotação fixa */
     float price = get_fixed_quote(req->asset_code);
     
     if (price < 0.0f) {
@@ -73,7 +55,6 @@ static void process_quote_request(int socket, const QuoteRequest *req) {
         return;
     }
     
-    /* Prepara resposta */
     QuoteResponse resp;
     create_message_header(&resp.header, req->header.message_id,
                           MSG_QUOTE_RESPONSE, MESSAGE_TIMEOUT_SECONDS);
@@ -83,7 +64,6 @@ static void process_quote_request(int socket, const QuoteRequest *req) {
     resp.quantity = req->quantity;
     resp.valid_until = time(NULL) + 10;  /* Cotação válida por 10 segundos */
     
-    /* Envia resposta */
     ssize_t sent = send(socket, (void *)&resp, sizeof(resp), 0);
     if (sent < 0) {
         perror("send");
@@ -94,9 +74,6 @@ static void process_quote_request(int socket, const QuoteRequest *req) {
            resp.asset_code, resp.price);
 }
 
-/**
- * Thread worker para cada cliente conectado
- */
 static void *handle_client(void *arg) {
     ClientContext *ctx = (ClientContext *)arg;
     int socket = ctx->client_socket;
@@ -118,7 +95,6 @@ static void *handle_client(void *arg) {
             break;
         }
         
-        /* Processa requisição */
         if (req.header.type == MSG_QUOTE_REQUEST) {
             process_quote_request(socket, &req);
         }
@@ -131,9 +107,6 @@ static void *handle_client(void *arg) {
     return NULL;
 }
 
-/**
- * Função principal do servidor
- */
 int quotation_server_main(int port) {
     int server_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket < 0) {
@@ -141,7 +114,6 @@ int quotation_server_main(int port) {
         return 1;
     }
     
-    /* Permite reutilizar endereço */
     int opt = 1;
     if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR,
                    &opt, sizeof(opt)) < 0) {
@@ -177,8 +149,7 @@ int quotation_server_main(int port) {
     printf("[SERVER] Aguardando conexões...\n\n");
     
     int thread_counter = 0;
-    
-    /* Loop de aceitação de conexões */
+
     while (1) {
         struct sockaddr_in client_addr;
         socklen_t client_addr_len = sizeof(client_addr);
@@ -192,12 +163,10 @@ int quotation_server_main(int port) {
             continue;
         }
         
-        /* Cria contexto para o cliente */
         ClientContext *ctx = malloc(sizeof(ClientContext));
         ctx->client_socket = client_socket;
         ctx->thread_id = thread_counter++;
         
-        /* Cria thread para lidar com o cliente */
         pthread_t tid;
         if (pthread_create(&tid, NULL, handle_client, ctx) != 0) {
             perror("pthread_create");
@@ -212,10 +181,6 @@ int quotation_server_main(int port) {
     close(server_socket);
     return 0;
 }
-
-/* ============================================================================
- * PONTO DE ENTRADA
- * ============================================================================ */
 
 int main(int argc, char *argv[]) {
     int port = QUOTATION_SERVER_PORT;
