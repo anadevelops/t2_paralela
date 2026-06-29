@@ -1,8 +1,19 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <time.h>
 #include <stdint.h>
+
+// Retorna timestamp monotônico em milissegundos
+static inline long long current_time_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
+}
 
 #define TRADING_SERVER_PORT 9000
 #define QUOTATION_SERVER_PORT 9001
@@ -53,8 +64,8 @@ typedef struct {
     MessageHeader header;
     char asset_code[32];
     float price;                  
-    float quantity;
-    time_t valid_until;
+    float     quantity;
+    long long valid_until;   // ms absoluto: current_time_ms() + ttl_ms
 } QuoteResponse;
 
 // Ordem de compra
@@ -88,8 +99,10 @@ typedef struct {
     
     float total_value;
     float risk_score;
-    
-    time_t expiration_time;
+
+    time_t    expiration_time;
+    long long ttl_deadline_ms;  // deadline absoluto da cotação em ms
+    int       asset1_bought;    // 1 se ativo 1 já foi comprado (controla compensação)
 } SagaContext;
 
 static inline int is_message_expired(const MessageHeader *header) {
@@ -122,9 +135,11 @@ static inline void init_saga_context(SagaContext *saga,
     
     strncpy(saga->asset_codes[0], asset1, 31);
     strncpy(saga->asset_codes[1], asset2, 31);
-    saga->quantities[0] = qty1;
-    saga->quantities[1] = qty2;
+    saga->quantities[0]   = qty1;
+    saga->quantities[1]   = qty2;
     saga->quotes_received = 0;
+    saga->ttl_deadline_ms = 0;
+    saga->asset1_bought   = 0;
 }
 
 #endif 

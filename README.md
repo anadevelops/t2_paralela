@@ -19,9 +19,18 @@ O sistema é composto por **4 processos independentes**:
 - **Descrição**: 
   - Se a primeira compra sucede e a segunda falha, executa uma venda (compensação) do primeiro ativo
   - Garante atomicidade das operações através da compensação
-  - Estados: INITIAL → QUOTE_1 → QUOTE_2 → RISK_ANALYSIS → EXECUTION → COMPLETED/FAILED
+  - Estados: INITIAL → RISK_ANALYSIS → EXECUTION → COMPLETED/FAILED
 
-### 2. **Request-Reply Pattern** (RPC Distribuído)
+### 2. **Scatter/Gather** (Cotações em Paralelo)
+- **Implementação**: Cotação dos dois ativos disparada simultaneamente via threads
+- **Local**: `client.c` → `scatter_gather_quotes()` + `quote_worker()`
+- **Descrição**:
+  - Cada thread abre sua própria conexão TCP e busca uma cotação
+  - `pthread_join` aguarda as duas e consolida os resultados (gather)
+  - O `ttl_deadline_ms` da saga é definido como o menor `valid_until` recebido
+  - Reduz a latência da etapa de cotação de `lat_A + lat_B` para `max(lat_A, lat_B)`
+
+### 3. **Request-Reply Pattern** (RPC Distribuído)
 - **Implementação**: Comunicação TCP síncrona entre cliente e servidores
 - **Locais**: 
   - `client.c`: envia `TradeOrder`/`QuoteRequest` e aguarda resposta
@@ -31,29 +40,34 @@ O sistema é composto por **4 processos independentes**:
   - Servidor processa com latência simulada e TTL checking
   - Retorna `TradeResponse` com status de sucesso/falha
 
-### 3. **TTL (Time-To-Live) / Message Expiration**
+### 4. **TTL (Time-To-Live) / Message Expiration**
 - **Implementação**: Verificação de expiração em cada etapa
-- **Estrutura**: `MessageHeader` com `timestamp` e `ttl`
+- **Estrutura**: `MessageHeader` com `timestamp` e `ttl`; `SagaContext` com `ttl_deadline_ms`
 - **Locais**:
-  - `common.h`: `is_message_expired()` valida se mensagem expirou
-  - `server.c`: verifica TTL de requisições de cotação
+  - `common.h`: `is_message_expired()` valida TTL de rede (30s)
+  - `server.c`: retorna `valid_until` em ms absolutos (TTL configurável)
   - `risk_server.c` e `purchase_server.c`: rejeitam mensagens expiradas
-  - `client.c`: valida TTL de respostas
+  - `client.c`: verifica `ttl_deadline_ms` antes do risco, antes das compras e entre as duas compras
 - **Comportamento**: Operação é abortada se TTL for excedido antes/depois de qualquer integração
 
 ## Fluxo de Execução (Exemplo 1: Sucesso)
 
 ```
 1. Client cria Saga: "Compra ETH/USDT + USD/BRL"
-2. Client → Quotation Server: "Qual o preço de ETH/USDT e USD/BRL?"
-   Quotation Server responde: ETH/USDT: R$1,300 | USD/BRL: R$5.00 (TTL: 300ms)
-3. Client → Risk Server: "Análise estes preços"
+2. SCATTER: Client dispara duas threads simultâneas ao Quotation Server
+   Thread A → ETH/USDT: R$1,300.00
+   Thread B → USD/BRL:  R$5.00
+   GATHER: consolida preços, define TTL deadline = now + 300ms
+3. [Verifica TTL] OK
+4. Client → Risk Server: envia dados da operação
    Risk Server aprova após latência (10-200ms)
-4. Client → Purchase Server: "Compra ETH/USDT"
-   Purchase Server executa com sucesso (20-300ms)
-5. Client → Purchase Server: "Compra USD/BRL"
+5. [Verifica TTL] OK
+6. Client → Purchase Server: "Compra ETH/USDT"
    Purchase Server executa com sucesso
-6. Saga completa ✅
+7. [Verifica TTL] OK
+8. Client → Purchase Server: "Compra USD/BRL"
+   Purchase Server executa com sucesso
+9. Saga completa ✅
 ```
 
 ## Fluxo de Execução (Exemplo 2: Falha com Compensação)
@@ -112,7 +126,8 @@ Executa todos os 4 servidores e cliente com configuração padrão em 1 comando.
 
 **Terminal 4 - Trading Client:**
 ```bash
-./trading_client 127.0.0.1 9001
+# Sintaxe: ./trading_client [N_sagas] [quote_host] [risk_host] [purchase_host]
+./trading_client 1 127.0.0.1 127.0.0.1 127.0.0.1
 ```
 
 ### Opção 3: Usando Make
@@ -139,6 +154,11 @@ O sistema permite simular cenários de falha através de parâmetros:
 ```bash
 ./purchase_server 9100 85 50 200  # 85% sucesso, latência 50-200ms
 ./purchase_server 9100 40 30 100  # 40% sucesso, latência 30-100ms (muito instável)
+```
+
+### Quotation Server (TTL curto para forçar expiração)
+```bash
+./quotation_server 9001 50 0   # TTL de 50ms — expira antes do risco responder
 ```
 
 ## Estruturas de Dados
@@ -212,29 +232,80 @@ typedef struct {
 
 ## Exemplos de Saída
 
-### Execução Bem-Sucedida
+### Cenário 1: Execução Bem-Sucedida
 ```
-INICIANDO SAGA #1
-▶ Etapa 1: Solicitando cotação de PETR4 (100.00 unidades)
-◄ Etapa 2: Aguardando cotação de PETR4...
-✓ Cotação recebida: PETR4 @ R$25.50
-▶ Etapa 3: Solicitando cotação de VALE5 (50.00 unidades)
-◄ Etapa 4: Aguardando cotação de VALE5...
-✓ Cotação recebida: VALE5 @ R$75.30
-🔍 Etapa 5: Enviando dados ao Risk Server...
-✅ Risk Server aprovou
-✈ Etapa 6: Enviando ordens de compra ao Purchase Server...
-✓ Compra 1 executada
-✓ Compra 2 executada
-✅ SAGA #1 COMPLETADA COM SUCESSO!
+Trading | sagas=1 qhost=127.0.0.1 rhost=127.0.0.1 phost=127.0.0.1
+
+[PM] Saga 1 criada (ETH/USDT | USD/BRL)
+
+========================================
+SAGA #1 (ETH/USDT | USD/BRL)
+========================================
+
+[SAGA 1] SCATTER (ETH/USDT | USD/BRL)
+[SCATTER] USD/BRL @ R$5.00
+[SCATTER] ETH/USDT @ R$1300.00
+[SAGA 1] GATHER: ETH/USDT=R$1300.00 | USD/BRL=R$5.00 | TTL restante=480ms
+
+[SAGA 1] Etapa 5: risco
+[SAGA 1] Risco aprovou: RISK_APPROVED (latency=44ms)
+
+[SAGA 1] Etapa 6: compras
+[SAGA 1] Compra 1 OK: BUY_EXECUTED asset=ETH/USDT qty=1.00 price=1300.00 (latency=47ms)
+[SAGA 1] Compra 2 OK: BUY_EXECUTED asset=USD/BRL qty=1.00 price=5.00 (latency=39ms) | total=R$1305.00
+SAGA #1 COMPLETA
+
+=== SUMARIO: 1 OK | 0 FALHA | 1 TOTAL ===
 ```
 
-### Falha com Compensação
+Configuração usada:
+```bash
+./quotation_server 9001 500 0
+./risk_server 9002 100 10 50
+./purchase_server 9100 100 10 50
+./trading_client 1 127.0.0.1 127.0.0.1 127.0.0.1
 ```
-✓ Compra 1 executada
-❌ Falha na compra do segundo ativo
-⚠ Iniciando compensação: vendendo ativo 1
-❌ SAGA #1 FALHOU!
+
+### Cenário 2: Falha por TTL Expirado
+```
+[SAGA 1] SCATTER (ETH/USDT | USD/BRL)
+[SCATTER] USD/BRL @ R$5.00
+[SCATTER] ETH/USDT @ R$1300.00
+[SAGA 1] GATHER: ETH/USDT=R$1300.00 | USD/BRL=R$5.00 | TTL restante=45ms
+
+[SAGA 1] Etapa 5: risco
+[TTL] expirado antes das compras
+SAGA #1 FALHOU
+
+=== SUMARIO: 0 OK | 1 FALHA | 1 TOTAL ===
+```
+
+Configuração usada (TTL=50ms, risco demora 200–300ms):
+```bash
+./quotation_server 9001 50 0
+./risk_server 9002 100 200 300
+./purchase_server 9100 100 0 0
+./trading_client 1 127.0.0.1 127.0.0.1 127.0.0.1
+```
+
+### Cenário 3: Falha na Compra do Ativo 2 (com Compensação)
+```
+[SAGA 1] Etapa 6: compras
+[SAGA 1] Compra 1 OK: BUY_EXECUTED asset=ETH/USDT qty=1.00 price=1300.00 (latency=12ms)
+[SAGA 1] Falha compra 2: BUY_FAILED asset=USD/BRL (forced failure)
+[SAGA 1] Compensacao: vendendo ETH/USDT
+[SAGA 1] Compensacao: SELL_EXECUTED asset=ETH/USDT qty=-1.00 price=1300.00
+SAGA #1 FALHOU
+
+=== SUMARIO: 0 OK | 1 FALHA | 1 TOTAL ===
+```
+
+Configuração usada (USD/BRL forçado a falhar):
+```bash
+./quotation_server 9001 500 0
+./risk_server 9002 100 10 50
+./purchase_server 9100 100 10 50 USD/BRL
+./trading_client 1 127.0.0.1 127.0.0.1 127.0.0.1
 ```
 
 ## Notas Técnicas
