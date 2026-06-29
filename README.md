@@ -67,7 +67,7 @@ O sistema é composto por **4 processos independentes**:
 7. [Verifica TTL] OK
 8. Client → Purchase Server: "Compra USD/BRL"
    Purchase Server executa com sucesso
-9. Saga completa ✅
+9. Saga completa 
 ```
 
 ## Fluxo de Execução (Exemplo 2: Falha com Compensação)
@@ -76,10 +76,10 @@ O sistema é composto por **4 processos independentes**:
 1. Client cria Saga: "Compra ETH/USDT + USD/BRL"
 2. Client → Quotation Server: Recebe ETH/USDT: R$1,250 | USD/BRL: R$4.90
 3. Client → Risk Server: Aprova operação
-4. Client → Purchase Server: Compra ETH/USDT ✅
-5. Client → Purchase Server: Compra USD/BRL ❌ FALHA
+4. Client → Purchase Server: Compra ETH/USDT 
+5. Client → Purchase Server: Compra USD/BRL FALHA
 6. Compensação: Client → Purchase Server: Vende ETH/USDT
-7. Saga falha ❌ (com rollback)
+7. Saga falha (com rollback)
 ```
 
 ## Compilação
@@ -210,25 +210,25 @@ typedef struct {
 
 ## Garantias do Sistema
 
-✅ **Atomicidade**: Operação completa (2 compras) ou nenhuma (com compensação)
-✅ **Confiabilidade**: TTL garante que dados expirados não são usados
-✅ **Redundância**: Cada integração é um processo independente
-✅ **Configurabilidade**: Taxa de sucesso e latência controláveis
-✅ **Rastreabilidade**: Logs detalhados de cada etapa com IDs únicos
+- **Atomicidade**: Operação completa (2 compras) ou nenhuma (com compensação)
+- **Confiabilidade**: TTL garante que dados expirados não são usados
+- **Redundância**: Cada integração é um processo independente
+- **Configurabilidade**: Taxa de sucesso e latência controláveis
+- **Rastreabilidade**: Logs detalhados de cada etapa com IDs únicos
 
 ## Requisitos Atendidos
 
-- ✅ Implementação de 4 processos distribuídos independentes
-- ✅ Processamento de até N ordens de compra (parametrizável)
-- ✅ 4 integrações confiáveis e atômicas (cotação, risco, compra1, compra2)
-- ✅ TTL com aborto de operação se excedido
-- ✅ Falha em qualquer ativo cancela operação com compensação
-- ✅ 3 padrões de projeto distribuído:
+- Implementação de 4 processos distribuídos independentes
+- Processamento de até N ordens de compra (parametrizável)
+- 4 integrações confiáveis e atômicas (cotação, risco, compra1, compra2)
+- TTL com aborto de operação se excedido
+- Falha em qualquer ativo cancela operação com compensação
+- 3 padrões de projeto distribuído:
   1. **Saga Distribuído** (orquestração + compensação)
   2. **Request-Reply Pattern** (RPC síncrono)
   3. **TTL / Message Expiration** (confiabilidade temporal)
-- ✅ Taxa de sucesso configurável em cada servidor
-- ✅ Latência configurável (sleep aleatório)
+- Taxa de sucesso configurável em cada servidor
+- Latência configurável (sleep aleatório)
 
 ## Exemplos de Saída
 
@@ -307,5 +307,3 @@ Configuração usada (USD/BRL forçado a falhar):
 ./purchase_server 9100 100 10 50 USD/BRL
 ./trading_client 1 127.0.0.1 127.0.0.1 127.0.0.1
 ```
-
-## Notas Técnicas
